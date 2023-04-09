@@ -23,7 +23,7 @@ class SimilarityCalculatorManager: SimilarityCalculator {
     private var weightsSum: Double = 0.0
 
     override fun calculateSimilarity(request: Item, result: Item): Double {
-        return calculators.map { it.first.calculateSimilarity(request, result).clamp(0.0, 1.0)*it.second }.sum()/weightsSum
+        return calculators.sumOf { it.first.calculateSimilarity(request, result).clamp(0.0, 1.0) * it.second } / weightsSum
     }
 
     fun addCalculator(calc: SimilarityCalculator, weight: Double) {
@@ -50,25 +50,38 @@ class PopularitySimilarity(val mostPopularGetter: () -> ULong): SimilarityCalcul
 
 class RawTextSearchAPI(private val node: RootNode, private val similarityCalculator: SimilarityCalculator): TextSearchAPI {
     override fun query(query: String, limit: Int?): QueryResponse {
-        val roots = mutableMapOf<Item.Root, MutableSet<Item>>()
+        // println("root $node")
+        // node.print()
+        val roots = mutableMapOf<Item.Root, MutableList<Item>>()
         val request = Item.Root(query)
-
+        val start = System.nanoTime()
         val rawResults = prepareStr(query).second.flatMap {
             node.query(it)
         }
+        val finish = System.nanoTime()
+        println("raw query took ${finish-start}ns")
+        // println("raw ${rawResults.map { it.value }}")
+        val startRest = System.nanoTime()
+
+        var maxEntries = 0
 
         rawResults.forEach {
+            // println("raw ${it.value.untinted}")
             val root = it.value.rootItem
             roots.compute(root) { k, v ->
                 if (v == null) {
-                    mutableSetOf(it.value)
+                    if (maxEntries == 0) maxEntries = 1
+                    mutableListOf(it.value)
                 }
                 else {
                     v.add(it.value)
-                    null
+                    if (maxEntries < v.size) maxEntries = v.size
+                    v
                 }
             }
         }
+
+        // println("raw2 $rawResults")
 
         val res = roots.map {
             Pair(it, similarityCalculator.calculateSimilarity(request, it.key))
@@ -80,18 +93,24 @@ class RawTextSearchAPI(private val node: RootNode, private val similarityCalcula
             val similarity = it.second
 
             val ranges = values.mapNotNull {
-                if (it is Item.Slice) {
-                    it.range
+                if (it.untinted is Item.Slice) {
+                    (it.untinted as Item.Slice).range
                 }
                 else {
                     null
                 }
             }
 
-            QueryResult(values.map { it.string }, RootResult(root.data, root.value, counter = root.counter), similarity, mergeRanges(ranges))
+            // println("values $values")
+            // println("values ${values.map { if (it is Item.Slice) Pair(it.range, it.source is Item.Slice && it.tinted) else Pair(0..0, false) }}")
+            // println("daddys ${values.map { it.daddy }}")
+            // println("untinted ${values.map { it.untinted }}")
+            QueryResult(values.map { it.untinted.string }, RootResult(root.data, root.value, counter = root.counter), similarity, mergeRanges(ranges))
         }
+        val finishRest = System.nanoTime()
+        println("rest took ${finishRest-startRest}ns")
 
-        return QueryResponse(res)
+        return QueryResponse(res, roots.size)
     }
 
     override fun addChild(root: RootChildQuery) {
@@ -116,7 +135,9 @@ class RawTextSearchAPI(private val node: RootNode, private val similarityCalcula
     override fun addRoot(root: RootQuery) {
         val res = node.query(Item.Root(root.value, null))
         val first = res.firstOrNull()
-        if (first == null || first.value != res || first.value !is Item.Root) {
+
+        // println("first $first")
+        if (first == null || first.value.root != root.value || root.forceInsert) {
             val (dbRoot, modifications) = prepareStr(root.value)
             dbRoot.data = root.data
 

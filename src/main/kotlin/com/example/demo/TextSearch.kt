@@ -1,7 +1,6 @@
 package com.example.demo
 
 import com.fasterxml.jackson.databind.JsonNode
-import kotlin.math.max
 
 fun Item.tokenize(): List<Item> {
     val tokens = mutableListOf<Item>()
@@ -27,12 +26,13 @@ fun Item.tokenize(): List<Item> {
 }
 
 fun Item.normalize(): Item {
-    return Item.Modification(this.string.lowercase(), this)
+    val str = this.string.lowercase()
+    return Item.Modification(str, this)
 }
 
 fun Item.simplify(): Item {
     val res = this.string.mapNotNull { c ->
-        if (c.isDigit() || c.isLetter()) {
+        if (c.isLetterOrDigit()) {
             c
         }
         else if (c.isWhitespace()) {
@@ -41,7 +41,12 @@ fun Item.simplify(): Item {
             null
         }
     }
-    return Item.Modification(res.joinToString(""), this)
+    val str = res.joinToString("")
+    return Item.Modification(str, this)
+}
+
+fun Item.join(): Item {
+    return Item.Modification(this.string.replace(" ", ""), this)
 }
 
 fun Item.lower(): Item {
@@ -85,16 +90,23 @@ sealed class Item {
             get() = value.length
     }
 
-    class Slice(val range: IntRange, val source: Item): Item() {
+    class Slice(val range: IntRange, val source: Item, val tinted: Boolean = false): Item() {
         override val string: String
             get() = source.string.slice(range)
 
         override val length: Int
             get() = range.last+1-range.first
 
-        override fun slice(range: IntRange): Item {
-            val newRange = IntRange(range.first+this.range.first, this.range.first+range.last)
-            return source.slice(newRange)
+        override fun slice(range: IntRange, tint: Boolean): Item {
+            val newRange = this.range.first+range.first..this.range.first+range.last
+            if (!this.tinted) {
+                return Slice(range.first..range.last, this, tint)
+            }
+
+            if (newRange == this.range) {
+                return source.slice(newRange, this.tinted)
+            }
+            return source.slice(newRange, tint)
         }
     }
 
@@ -102,8 +114,8 @@ sealed class Item {
     abstract val length: Int
     var counter: ULong = 0u
 
-    open fun slice(range: IntRange): Item {
-        return Slice(range, this)
+    open fun slice(range: IntRange, tint: Boolean = false): Item {
+        return Slice(range, this, tint)
     }
 
     val percentageOfOriginal: Double
@@ -118,6 +130,20 @@ sealed class Item {
             is Root -> this.value
             is Modification -> this.source.root
             is Slice -> this.source.root
+        }
+
+    val daddy: Item
+        get() = when (this) {
+            is Modification -> this
+            is Root -> this
+            is Slice -> source.daddy
+        }
+
+    val untinted: Item
+        get() = when (this) {
+            is Modification -> this
+            is Root -> this
+            is Slice -> if (!this.tinted) this else this.source.untinted
         }
 
     val rootItem: Root
@@ -141,32 +167,42 @@ sealed class Item {
 }
 
 interface INode {
+    fun print(spacing: Int = 0) {
+        println(" ".repeat(spacing*2))
+        children.forEach {
+            it.print(spacing+1)
+        }
+    }
+
     val children: MutableList<Node>
 
     fun query(q: Item): Collection<Node> {
-        val fullMatch = mutableSetOf<Node>()
-        val partialMatch = mutableSetOf<Node>()
+        val match = mutableListOf<Node>()
 
         for (c in children) {
             val sim = c.value.similar(q.string)
 
             if (sim == c.value.length) {
                 if (sim == q.length) {
-                    fullMatch.add(c)
+                    match.add(c)
                 }
 
                 val e = c.query(q.slice(sim until q.length))
-                fullMatch.addAll(e)
+                match.addAll(e)
             }
+            // FIXME
             else if (sim == q.length) {
-                fullMatch.add(c)
+                match.add(c)
             }
         }
 
-        return fullMatch.ifEmpty { partialMatch }
+        return match
     }
 
     fun insert(value: Item) {
+        assert(value.string.isNotEmpty())
+
+        // println("inserting $value")
         //             index, amount
         var maxSim: Pair<Int, Int>? = null
 
@@ -176,16 +212,25 @@ interface INode {
                 maxSim = Pair(index, sim)
             }
         }
+        assert(maxSim?.second != 0)
+
+        // println("max sim ${maxSim?.second} $value ${children.map { it.value }}")
 
         if (maxSim == null) {
+            // println("adding $value")
             this.children.add(Node(value))
         }
         else {
+            // println("HAHA $value")
             val node = children[maxSim!!.first]
 
             node.slice(maxSim!!.second)
 
-            node.insert(value.slice(maxSim!!.second until  value.length))
+            // println("before")
+            val d = value.slice(maxSim!!.second until  value.length, true)
+
+            // println("d $d $value ${maxSim?.second}")
+            node.insert(d)
         }
     }
 }
@@ -206,23 +251,36 @@ data class RootNode(override val children: MutableList<Node> = mutableListOf()):
 }
 
 data class Node(var value: Item, override var children: MutableList<Node> = mutableListOf()): INode {
+    override fun print(spacing: Int) {
+        print(" ".repeat(spacing))
+        println("<$value>")
+        children.forEach {
+            it.print(spacing+1)
+        }
+    }
+
     fun slice(amount: Int) {
         if (children.size == 0) {
             val old = value
-            val new = value.slice(0 until amount)
-            value = new
-            children.add(Node(old.slice(amount until old.length)))
+
+            value = value.slice(0 until amount, true)
+
+            val o = old.slice(amount until old.length, true)
+            children.add(Node(o))
         }
+        // FIXME this causes the database to be unnecessary deep but makes it work???
         else if (amount-1 != value.length) {
-            val newNode = Node(Item.Slice(amount until value.length, value), children)
-            value = Item.Slice(0 until amount, value)
+            val sl = value.slice(amount until value.length, true)
+            if (sl.string == "") return
+            val newNode = Node(sl, children)
+            value = value.slice(0 until amount, true) // Item.Slice(0 until amount, value, true)
             children = mutableListOf(newNode)
         }
     }
 }
 
-fun prepareStr(str: String): Pair<Item.Root, Set<Item>> {
-    val result = mutableSetOf<Item>()
+fun prepareStr(str: String): Pair<Item.Root, Collection<Item>> {
+    val result = mutableListOf<Item>()
     val root = Item.Root(str)
     result.add(root)
 
@@ -234,6 +292,15 @@ fun prepareStr(str: String): Pair<Item.Root, Set<Item>> {
 
     val simplifiedNormalized = normalized.simplify()
     result.add(simplifiedNormalized)
+
+    val simplifiedNormalizedJoined = simplifiedNormalized.join()
+    result.add(simplifiedNormalizedJoined)
+
+    val simplifiedJoined = simplified.join()
+    result.add(simplifiedJoined)
+
+    val normalizedJoined = normalized.join()
+    result.add(normalizedJoined)
 
     result.addAll(root.tokenize())
     result.addAll(normalized.tokenize())

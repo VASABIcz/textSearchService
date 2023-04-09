@@ -6,6 +6,7 @@ import org.springframework.web.bind.annotation.RequestBody
 import org.springframework.web.bind.annotation.RequestMapping
 import org.springframework.web.bind.annotation.RequestParam
 import org.springframework.web.bind.annotation.RestController
+import java.io.File
 
 @RequestMapping("/")
 @RestController
@@ -17,9 +18,21 @@ class RestTextSearchAPI: TextSearchAPI {
     }
     val p: TextSearchAPI = RawTextSearchAPI(dbRoot, sim)
 
+    init {
+        val f = File("/home/vasabi/programing/kotlin/textSearch/src/main/kotlin/parsed.txt")
+        val lines = f.readLines()
+        lines.forEach {
+            p.addRoot(RootQuery(it, null))
+        }
+        println("FINISHED!!")
+    }
+
     @GetMapping("/query")
     override fun query(@RequestParam query: String, @RequestParam limit: Int?): QueryResponse {
-        return p.query(query, limit)
+        // println("q $query")
+        val res =  p.query(query, limit)
+        // println("Query done")
+        return res
     }
 
     @PostMapping("/addChild")
