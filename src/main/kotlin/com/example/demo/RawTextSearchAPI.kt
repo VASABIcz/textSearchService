@@ -88,6 +88,10 @@ class RawTextSearchAPI(private val node: RootNode, private val similarityCalcula
         }.sortedByDescending {
             it.second
         }.take(limit ?: 10).map {
+            it.first.key.counter++
+            if (it.first.key.counter > node.maxCounter) {
+                node.maxCounter = it.first.key.counter
+            }
             val values = it.first.value
             val root = it.first.key
             val similarity = it.second

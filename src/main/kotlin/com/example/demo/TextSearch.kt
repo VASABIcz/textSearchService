@@ -237,17 +237,6 @@ interface INode {
 
 data class RootNode(override val children: MutableList<Node> = mutableListOf()): INode {
     var maxCounter: ULong = 0u
-
-    override fun query(q: Item): Collection<Node> {
-        val res = super.query(q)
-        res.forEach {
-            it.value.counter++
-            if (it.value.counter > maxCounter) {
-                maxCounter = it.value.counter
-            }
-        }
-        return res
-    }
 }
 
 data class Node(var value: Item, override var children: MutableList<Node> = mutableListOf()): INode {
